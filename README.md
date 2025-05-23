@@ -1,4 +1,5 @@
-# SAE_Pokemon
+# SAE_Pokemon 
+## Allaire Mathis, Jouanno Florent, Loret Martin, Pavageau Clément SD3 Groupe D
 
 ![image](https://github.com/user-attachments/assets/24f64275-78b6-4873-83cd-1cc67608d513)
 
