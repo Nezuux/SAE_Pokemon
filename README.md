@@ -1,5 +1,8 @@
 # SAE_Pokemon
 
+![image](https://github.com/user-attachments/assets/24f64275-78b6-4873-83cd-1cc67608d513)
+
+
 ## Présentation
 
 **SAE_Pokemon** est un projet d’étude de données centré sur le nouveau jeu de cartes à collectionner Pokémon (TCG Pocket).  
