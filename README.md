@@ -28,9 +28,9 @@ L’objectif principal est de collecter, structurer et analyser des informations
 
 ## Structure du projet
 
-- `DataCollection.py` : script principal d’extraction et de structuration des données
-- `output/` : fichiers JSON générés pour chaque tournoi
-- `cache/` : données mises en cache pour limiter les appels redondants
+- `Data_collection` : contient le code python d’extraction et de structuration des données
+- `Data_transformation` : contient les scripts python pour la transformation des données
+- `data_viz` : contient le fichier PowerBI.
 - `requirements.txt` : dépendances Python nécessaires à l’exécution
 
 ---
