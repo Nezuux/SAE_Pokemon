@@ -1,69 +1,92 @@
 # SAE_Pokemon 
-## Allaire Mathis, Jouanno Florent, Loret Martin, Pavageau Clément SD3 Groupe D
+## Allaire Mathis, Jouanno Florent, Loret Martin, Pavageau Clément — SD3 Groupe D
 
 ![image](https://github.com/user-attachments/assets/24f64275-78b6-4873-83cd-1cc67608d513)
 
+---
 
 ## Présentation
 
 **SAE_Pokemon** est un projet d’étude de données centré sur le nouveau jeu de cartes à collectionner Pokémon (TCG Pocket).  
-L’objectif principal est de collecter et d’analyser des informations issues de tournois en ligne, afin de mieux comprendre les tendances de jeu, les stratégies de decks et le métagame de cette nouvelle scène compétitive.
+L’objectif principal est de collecter, structurer et analyser des informations issues de tournois en ligne, afin de mieux comprendre les tendances de jeu, les stratégies de decks et le métagame de cette nouvelle scène compétitive.
 
 ---
 
 ## Fonctionnalités principales
 
-- **Web scraping asynchrone** des résultats de tournois sur le site [play.limitlesstcg.com](https://play.limitlesstcg.com).
+- **Web scraping asynchrone** des résultats de tournois sur le site [play.limitlesstcg.com](https://play.limitlesstcg.com)
 - Extraction structurée des informations suivantes :
   - Détails des tournois (nom, date, organisateur, format, nombre de joueurs…)
-  - Liste des joueurs et de leurs classements
+  - Liste des joueurs et leurs classements
   - Decklists complètes pour chaque joueur (cartes jouées, quantités…)
   - Résultats de matchs et pairings
-- **Stockage des données extraites** au format JSON pour faciliter l’analyse et la réutilisation.
+- **Sauvegarde des données** au format JSON
+- **Utilisation de PostgreSQL** pour stocker et analyser les données
+- Nettoyage automatique des noms de fichiers problématiques (ex. : noms réservés comme `nul` sur Windows)
 
 ---
 
 ## Structure du projet
 
-- `DataCollection.py` : script principal d’extraction et de structuration des données.
-- `output/` : dossier où sont stockés les fichiers JSON générés pour chaque tournoi.
-- `cache/` : dossier de cache pour accélérer les extractions et limiter les requêtes web.
-- `requirements.txt` : liste des dépendances Python nécessaires.
+- `DataCollection.py` : script principal d’extraction et de structuration des données
+- `output/` : fichiers JSON générés pour chaque tournoi
+- `cache/` : données mises en cache pour limiter les appels redondants
+- `requirements.txt` : dépendances Python nécessaires à l’exécution
 
 ---
 
 ## Installation
 
 1. **Cloner le dépôt**
+
+```bash
 git clone <URL_DU_DEPOT>
 cd SAE_Pokemon
 
-text
+## Installer les dépendances
 
-2. **Installer les dépendances**
 pip install -r requirements.txt
 
-text
-**Principaux modules utilisés :**
-- `aiohttp`
-- `aiofile`
-- `aiofiles`
-- `beautifulsoup4`
 
----
 
-## Utilisation
+## Dépendances principales
+Voici les bibliothèques utilisées dans le projet :
 
-Lance simplement le script principal pour démarrer la collecte des données :
-python DataCollection.py
+- aiohttp — requêtes HTTP asynchrones
 
-text
-Les données extraites seront automatiquement enregistrées dans le dossier `output/` au format JSON.
+- aiofiles — gestion de fichiers asynchrone
 
----
+- beautifulsoup4 — parsing HTML
+
+- pandas — traitement de données tabulaires
+
+- psycopg2-binary — connexion à une base de données PostgreSQL
+
+- requests — requêtes HTTP synchrones (pour certains cas)
+
+- Bibliothèques Python standard : json, re, os, time, asyncio, concurrent.futures, urllib.parse, dataclasses
+```
+
+
 
 ## Points techniques notables
+- Web scraping rapide et robuste : usage combiné de asyncio, aiohttp et aiofiles pour maximiser la performance.
 
-- **Asynchrone et performant** : le scraping utilise `asyncio`, `aiohttp` et `aiofile` pour maximiser la rapidité et la robustesse.
-- **Gestion des cas particuliers Windows** : par exemple, si un joueur s’appelle `nul` (nom réservé sous Windows), il sera automatiquement renommé en `joueur_nul` dans les chemins de fichiers.
-- **Modularité** : le code est organisé en fonctions spécialisées pour faciliter la maintenance et l’évolution.
+- Compatibilité multi-plateforme : gestion de cas spécifiques à Windows (noms de fichiers interdits).
+
+- Modularité : architecture du code pensée pour être facilement maintenable et évolutive.
+
+- Pré-traitement intelligent : vérification, nettoyage, standardisation des noms de tournois, decks et joueurs.
+
+- Connexion PostgreSQL : intégration d'une base de données relationnelle pour un traitement plus poussé des données collectées.
+
+## Auteurs
+Projet réalisé dans le cadre du BUT SD3 à l’IUT de Vannes — Groupe D
+
+Mathis Allaire
+
+Florent Jouanno
+
+Martin Loret
+
+Clément Pavageau
