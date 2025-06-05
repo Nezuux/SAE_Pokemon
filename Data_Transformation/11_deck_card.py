@@ -2,7 +2,7 @@
 import sys
 import os
 
-# Force l'encodage UTF-8 dès le début
+# Forcer l'encodage UTF-8 dès le début pour éviter les problèmes d'encodage lors des sorties console
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
@@ -20,73 +20,75 @@ import io
 import csv
 from collections import defaultdict
 
-# Configuration ULTRA-OPTIMISÉE
-host = 'localhost'
-port = 5432
-database = 'postgres'
-user = 'postgres'
-json_folder = r"E:\DataCollection\output"#os.getenv("JSON_FOLDER")
-BATCH_SIZE = 2000000  # ÉNORME batch pour COPY
-MAX_WORKERS = min(32, multiprocessing.cpu_count() * 2)  # Hyperthreading
-CHUNK_SIZE = 1000  # Fichiers par worker
+# --- CONFIGURATION ULTRA-OPTIMISÉE ---
+
+host = 'localhost'  # Hôte PostgreSQL
+port = 5432         # Port PostgreSQL
+database = 'postgres'  # Nom de la base
+user = 'postgres'      # Utilisateur PostgreSQL
+json_folder = r"E:\DataCollection\output"  # Dossier contenant les fichiers JSON à traiter
+
+BATCH_SIZE = 2000000  # Très gros batch pour la commande COPY (insertion massive rapide)
+MAX_WORKERS = min(32, multiprocessing.cpu_count() * 2)  # Nombre de processus parallèles, adapté au CPU
+CHUNK_SIZE = 1000     # Nombre de fichiers JSON traités par processus
+
+# --- FONCTIONS UTILITAIRES ---
 
 def clean_text(text):
+    """Nettoie un texte en remplaçant les caractères non-ASCII par des espaces, sans regex (ultra rapide)."""
     if not text:
         return ''
-    # Version ultra-rapide sans regex
     return ''.join(c if ord(c) < 128 else ' ' for c in str(text)).strip()
 
 def safe_json_load(file_path):
-    """Version ultra-optimisée avec ujson si disponible"""
+    """Charge un fichier JSON avec plusieurs essais d'encodages, utilise ujson si possible (plus rapide)."""
     try:
-        import ujson as json_lib  # 3x plus rapide que json standard
+        import ujson as json_lib  # ujson est une alternative rapide au json standard
     except ImportError:
         import json as json_lib
     
-    encodings = ['utf-8', 'latin-1', 'cp1252']
+    encodings = ['utf-8', 'latin-1', 'cp1252']  # Tentatives d'encodages successifs
     
     for encoding in encodings:
         try:
             with open(file_path, 'rb') as f:
                 content = f.read()
-                text = content.decode(encoding, errors='replace')
+                text = content.decode(encoding, errors='replace')  # Décodage robuste
                 return json_lib.loads(text)
         except:
             continue
-    return None
+    return None  # Aucun encodage n'a fonctionné
 
 def get_conn():
-    """Connexion PostgreSQL ultra-optimisée (version corrigée)"""
+    """Connexion PostgreSQL ultra-optimisée avec paramètres de session pour meilleure perf."""
     try:
-        os.environ['PGCLIENTENCODING'] = 'UTF8'
+        os.environ['PGCLIENTENCODING'] = 'UTF8'  # Forcer encodage client
         
         conn = psycopg2.connect(
-            host=host, 
-            port=port, 
-            dbname=database, 
-            user=user
+            host=host, port=port, dbname=database, user=user
         )
         conn.set_client_encoding('UTF8')
         
-        # Optimisations de session SEULEMENT
+        # Paramètres session pour améliorer les performances d'insertion et de gestion mémoire
         with conn.cursor() as cur:
             cur.execute("SET work_mem = '1GB'")
             cur.execute("SET maintenance_work_mem = '2GB'")
-            cur.execute("SET synchronous_commit = off")
+            cur.execute("SET synchronous_commit = off")  # Désactive l'attente de confirmation disque pour plus de vitesse
             cur.execute("SET checkpoint_completion_target = 0.9")
             cur.execute("SET wal_buffers = '64MB'")
         conn.commit()
         
         return conn
     except Exception:
+        # En cas d'erreur, connexion sans réglages spécifiques
         return psycopg2.connect(host=host, port=port, dbname=database, user=user)
 
 def create_deck_id(player_id, tournament_id):
-    """Création du deck_id par concaténation simple"""
+    """Création simple d'un identifiant deck par concaténation player_id + '_' + tournament_id."""
     return f"{player_id}_{tournament_id}"
 
 def create_deck_card_table_optimized(conn):
-    """Création de table ultra-optimisée"""
+    """Création d'une table PostgreSQL UNLOGGED pour insertion rapide, avec autovacuum désactivé."""
     with conn.cursor() as cur:
         cur.execute("""
             DROP TABLE IF EXISTS deck_card CASCADE;
@@ -104,13 +106,13 @@ def create_deck_card_table_optimized(conn):
         print("[OK] Table UNLOGGED deck_card créée (mode vitesse max)")
 
 def process_files_chunk(file_chunk):
-    """Traitement ultra-optimisé d'un chunk de fichiers"""
-    deck_cards_dict = defaultdict(lambda: defaultdict(int))  # Déduplication native
+    """Traitement parallèle d'un groupe de fichiers JSON."""
+    deck_cards_dict = defaultdict(lambda: defaultdict(int))  # Dictionnaire imbriqué pour déduplication et max(count)
     
     for filename in file_chunk:
         try:
             file_path = os.path.join(json_folder, filename)
-            data = safe_json_load(file_path)
+            data = safe_json_load(file_path)  # Chargement JSON sécurisé
             
             if not data:
                 continue
@@ -126,7 +128,6 @@ def process_files_chunk(file_chunk):
                 if not decklist or not player_id:
                     continue
                 
-                # Utilisation de la nouvelle fonction create_deck_id
                 deck_id = create_deck_id(player_id, tournament_id)
                 
                 for card in decklist:
@@ -139,32 +140,33 @@ def process_files_chunk(file_chunk):
                     count = int(card.get('count', 1))
                     
                     key = (deck_id, card_id)
+                    # Garde la valeur maximale de count en cas de doublon
                     if key in deck_cards_dict:
                         deck_cards_dict[key] = max(deck_cards_dict[key], count)
                     else:
                         deck_cards_dict[key] = count
                         
         except Exception:
+            # Ignorer silencieusement les erreurs pour continuer le traitement massif
             continue
     
-    # Conversion en format final
+    # Conversion en liste pour l'insertion en base (card_name laissé vide pour accélérer)
     result = []
     for (deck_id, card_id), count in deck_cards_dict.items():
-        result.append((deck_id, card_id, '', count))  # card_name vide pour vitesse
+        result.append((deck_id, card_id, '', count))
     
     return result
 
 def chunked_files(files, chunk_size):
-    """Découpage optimisé des fichiers"""
+    """Découpe une liste de fichiers en morceaux de taille chunk_size."""
     for i in range(0, len(files), chunk_size):
         yield files[i:i + chunk_size]
 
 def bulk_copy_insert(conn, data):
-    """Insertion ultra-rapide avec COPY - La méthode la plus rapide"""
+    """Insertion ultra-rapide en base avec la commande COPY via un buffer CSV en mémoire."""
     if not data:
         return 0
     
-    # Création d'un buffer CSV en mémoire
     csv_buffer = io.StringIO()
     csv_writer = csv.writer(csv_buffer, delimiter='\t')
     
@@ -173,7 +175,6 @@ def bulk_copy_insert(conn, data):
     
     csv_buffer.seek(0)
     
-    # COPY ultra-rapide
     with conn.cursor() as cur:
         cur.copy_from(
             csv_buffer,
@@ -185,15 +186,11 @@ def bulk_copy_insert(conn, data):
     return len(data)
 
 def create_indexes_without_transaction(conn):
-    """Création d'index SANS transaction pour éviter l'erreur CONCURRENTLY"""
+    """Création des index et clé primaire en dehors d'une transaction pour pouvoir utiliser CONCURRENTLY."""
     conn.close()
     
-    new_conn = psycopg2.connect(
-        host=host, 
-        port=port, 
-        dbname=database, 
-        user=user
-    )
+    # Nouvelle connexion en autocommit pour éviter les erreurs liées à CONCURRENTLY
+    new_conn = psycopg2.connect(host=host, port=port, dbname=database, user=user)
     new_conn.set_client_encoding('UTF8')
     new_conn.autocommit = True
     
@@ -201,17 +198,17 @@ def create_indexes_without_transaction(conn):
         try:
             print("[INFO] Création des index sans transaction...")
             
-            # PRIMARY KEY d'abord
+            # PRIMARY KEY (doit être dans une transaction)
             new_conn.autocommit = False
             cur.execute("ALTER TABLE deck_card ADD PRIMARY KEY (deck_id, card_id)")
             new_conn.commit()
             
-            # Index CONCURRENTLY
+            # Index avec CONCURRENTLY (permet de ne pas bloquer les requêtes)
             new_conn.autocommit = True
             cur.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_deck_card_card_id ON deck_card(card_id)")
             cur.execute("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_deck_card_deck_id ON deck_card(deck_id)")
             
-            # Retour en mode LOGGED
+            # Retour en mode LOGGED pour fiabilité après insertion massive
             new_conn.autocommit = False
             cur.execute("ALTER TABLE deck_card SET LOGGED")
             new_conn.commit()
@@ -233,7 +230,7 @@ def main():
         conn = get_conn()
         create_deck_card_table_optimized(conn)
         
-        # Phase 1: Récupération des fichiers
+        # Phase 1 : Récupération des fichiers JSON à traiter
         try:
             files = [f for f in os.listdir(json_folder) if f.endswith('.json')]
         except:
@@ -246,13 +243,12 @@ def main():
             print("[INFO] Aucun fichier à traiter")
             return
         
-        # Phase 2: Traitement parallèle MASSIF avec ProcessPoolExecutor
+        # Phase 2 : Traitement parallèle massif avec ProcessPoolExecutor
         print(f"[INFO] Traitement parallèle MASSIF avec {MAX_WORKERS} processus...")
         
         all_deck_cards = []
         file_chunks = list(chunked_files(files, CHUNK_SIZE))
         
-        # Utilisation de ProcessPoolExecutor pour parallélisme réel
         with ProcessPoolExecutor(max_workers=MAX_WORKERS) as executor:
             futures = [executor.submit(process_files_chunk, chunk) for chunk in file_chunks]
             
@@ -273,10 +269,9 @@ def main():
             print("[INFO] Aucune association trouvée")
             return
         
-        # Phase 3: Insertion ULTRA-RAPIDE avec COPY
+        # Phase 3 : Insertion massive ULTRA-RAPIDE avec COPY
         print("[INFO] Insertion ULTRA-RAPIDE avec COPY...")
         
-        # Découpage en méga-chunks pour COPY
         inserted = 0
         for i in range(0, len(all_deck_cards), BATCH_SIZE):
             chunk = all_deck_cards[i:i + BATCH_SIZE]
@@ -291,7 +286,7 @@ def main():
         conn.commit()
         print(f"\n[INFO] Insertion terminée")
         
-        # Phase 4: Finalisation SANS transaction pour les index CONCURRENTLY
+        # Phase 4 : Création des index hors transaction pour éviter blocages
         create_indexes_without_transaction(conn)
         
         elapsed = time.time() - start_time
