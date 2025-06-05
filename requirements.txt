@@ -6,4 +6,4 @@ aiohttp
 aiofiles
 openpyxl
 chardet
-sqlalchemy     
+sqlalchemy
