@@ -2,27 +2,30 @@
 import sys
 import os
 
-# Force l'encodage UTF-8 dès le début
+# ⚙️ Forcer l'encodage UTF-8 pour la sortie standard et les erreurs
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-import psycopg2
-import requests
-from bs4 import BeautifulSoup
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import urljoin
-import re
-import time
+# 📦 Import des bibliothèques nécessaires
+import psycopg2  # Connexion PostgreSQL
+import requests  # Requêtes HTTP
+from bs4 import BeautifulSoup  # Parsing HTML
+from concurrent.futures import ThreadPoolExecutor, as_completed  # Multithreading
+from urllib.parse import urljoin  # Construction d'URL absolue
+import re  # Expressions régulières
+import time  # Mesure du temps
 
-BATCH_SIZE = 50  # Taille des batchs d'insertion
+BATCH_SIZE = 50  # Nombre d'enregistrements à insérer par lot
 
+# 🧹 Nettoyage de texte (suppression des caractères non-ASCII)
 def clean_text(text):
     if not text:
         return None
     return re.sub(r'[^\x00-\x7F]+', ' ', text).strip()
 
+# 🔎 Récupère le nom de l’évolution précédente depuis une page de carte
 def fetch_evolution_from(url):
     try:
         response = requests.get(url, timeout=10)
@@ -37,6 +40,7 @@ def fetch_evolution_from(url):
         print(f"❌ Exception fetch_evolution_from {url}: {e}")
     return (url, None)
 
+# 🔗 Récupère toutes les URLs des évolutions précédentes depuis la page d'une carte
 def fetch_previous_urls(url):
     try:
         base_url = "https://pocket.limitlesstcg.com"
@@ -62,11 +66,10 @@ def fetch_previous_urls(url):
         print(f"❌ Exception fetch_previous_urls {url}: {e}")
         return None
 
+# 🔌 Connexion PostgreSQL avec gestion UTF-8 robuste
 def get_conn():
-    """Connexion PostgreSQL ultra-robuste"""
     try:
         os.environ['PGCLIENTENCODING'] = 'UTF8'
-        
         conn = psycopg2.connect(
             host='localhost', 
             port=5432, 
@@ -76,32 +79,24 @@ def get_conn():
         conn.set_client_encoding('UTF8')
         return conn
     except UnicodeDecodeError:
-        conn = psycopg2.connect(
+        # Connexion de secours en cas d'erreur d'encodage
+        return psycopg2.connect(
             host='localhost', 
             port=5432, 
             dbname='postgres', 
             user='postgres'
         )
-        return conn
 
+# 🛠️ Met à jour la colonne 'card_poke_finale' (1 = finale, 0 = évolution)
 def update_card_poke_finale_optimized(conn):
-    """Mise à jour optimisée de card_poke_finale"""
     cur = conn.cursor()
-    
     try:
         print("🔍 Vérification ou création de la colonne 'card_poke_finale'...")
 
-        # Vérifier si la colonne card_poke_finale existe
-        cur.execute("""
-            SELECT column_name FROM information_schema.columns 
-            WHERE table_name='card_evolve' AND column_name='card_poke_finale';
-        """)
+        # Vérifie si la colonne existe, sinon la crée ou la renomme
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='card_evolve' AND column_name='card_poke_finale';")
         if not cur.fetchone():
-            # Si card_poke_finale n'existe pas, vérifier si la colonne 'next' existe pour la renommer
-            cur.execute("""
-                SELECT column_name FROM information_schema.columns 
-                WHERE table_name='card_evolve' AND column_name='next';
-            """)
+            cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name='card_evolve' AND column_name='next';")
             if cur.fetchone():
                 cur.execute("ALTER TABLE card_evolve RENAME COLUMN next TO card_poke_finale;")
                 print("✅ Colonne 'next' renommée en 'card_poke_finale'")
@@ -112,7 +107,7 @@ def update_card_poke_finale_optimized(conn):
 
         print("📥 Mise à jour card_poke_finale avec SQL optimisé...")
 
-        # Mise à jour ultra-rapide en SQL pur
+        # Si la carte est une évolution précédente, alors ce n’est pas une carte finale
         cur.execute("""
             UPDATE card_evolve 
             SET card_poke_finale = CASE 
@@ -124,10 +119,8 @@ def update_card_poke_finale_optimized(conn):
                 ELSE 1 
             END;
         """)
-        
-        updated_rows = cur.rowcount
         conn.commit()
-        print(f"✅ card_poke_finale mis à jour pour {updated_rows} lignes")
+        print(f"✅ card_poke_finale mis à jour pour {cur.rowcount} lignes")
 
     except Exception as e:
         print(f"💥 Erreur mise à jour card_poke_finale : {e}")
@@ -135,12 +128,13 @@ def update_card_poke_finale_optimized(conn):
     finally:
         cur.close()
 
+# 🚀 Fonction principale pour scraper et alimenter la table card_evolve
 def update_card_evolve():
     conn = get_conn()
     cur = conn.cursor()
 
     try:
-        # Création de la table
+        # 📦 Création ou réinitialisation de la table
         cur.execute("DROP TABLE IF EXISTS card_evolve;")
         cur.execute("""
             CREATE TABLE card_evolve (
@@ -154,7 +148,7 @@ def update_card_evolve():
         conn.commit()
         print("✅ Table 'card_evolve' créée.")
 
-        # Récupération des URL de cartes Pokémon
+        # 🎯 Sélection des cartes Pokémon à traiter
         cur.execute("SELECT card_id FROM card WHERE card_id IS NOT NULL AND card_type = 'Pok mon';")
         urls = [url for (url,) in cur.fetchall()]
         print(f"🔗 {len(urls)} cartes Pokémon à traiter...")
@@ -163,7 +157,7 @@ def update_card_evolve():
             print("⚠️ Aucune carte Pokémon trouvée")
             return
 
-        # Étape 1 : Récupération des évolutions
+        # Étape 1 : Récupérer les noms des évolutions précédentes
         print("🔍 Scraping card_previous_evolve...")
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = [executor.submit(fetch_evolution_from, url) for url in urls]
@@ -172,11 +166,10 @@ def update_card_evolve():
                 url, evo_from = future.result()
                 evo_from_results[url] = evo_from
 
-        # Étape 2 : Récupération des previous_urls + insertion en batch
+        # Étape 2 : Récupérer les URLs d’évolutions précédentes + insertion par lots
         print("📥 Scraping card_previous_url et insertion...")
         with ThreadPoolExecutor(max_workers=5) as executor:
             futures_prev = {executor.submit(fetch_previous_urls, url): url for url in urls}
-
             batch = []
             total_inserted = 0
 
@@ -187,9 +180,8 @@ def update_card_evolve():
                 card_previous_evolve = evo_from_results.get(card_id)
 
                 for prev_url in previous_urls:
-                    batch.append((card_id, card_previous_evolve, prev_url, 0))  # card_poke_finale par défaut à 0
+                    batch.append((card_id, card_previous_evolve, prev_url, 0))  # valeur par défaut
 
-                # Insérer par batch
                 if len(batch) >= BATCH_SIZE:
                     try:
                         cur.executemany("""
@@ -206,7 +198,7 @@ def update_card_evolve():
                         conn.rollback()
                         batch.clear()
 
-            # Insertion finale
+            # Dernier batch restant
             if batch:
                 try:
                     cur.executemany("""
@@ -223,11 +215,11 @@ def update_card_evolve():
 
         cur.close()
 
-        # Étape 3 : Mise à jour optimisée de card_poke_finale
+        # Étape 3 : Mise à jour finale via SQL
         print("\n🎯 Mise à jour card_poke_finale...")
         update_card_poke_finale_optimized(conn)
 
-        # Étape 4 : Finalisation avec index
+        # Étape 4 : Indexation pour optimisation des requêtes futures
         print("📊 Création des index...")
         cur = conn.cursor()
         try:
@@ -248,6 +240,7 @@ def update_card_evolve():
         conn.close()
         print("🔌 Connexion PostgreSQL fermée.")
 
+# ▶️ Exécution du script
 if __name__ == '__main__':
     start_time = time.time()
     update_card_evolve()
