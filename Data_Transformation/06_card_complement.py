@@ -2,7 +2,7 @@
 import sys
 import os
 
-# Force l'encodage UTF-8 dès le début
+# Configuration de l'encodage en UTF-8 pour stdout et stderr
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
@@ -13,12 +13,15 @@ import requests
 from bs4 import BeautifulSoup
 import time
 
+# Nettoyage de texte (espaces, sauts de ligne)
 def clean(text):
     return text.strip().replace('\n', '').replace('  ', ' ')
 
+# Supprime les caractères non-ASCII (ex. : pour les champs texte simples)
 def remove_non_utf8(text):
     return text.encode('ascii', 'ignore').decode('ascii').strip() if text else None
 
+# Associe un nom d'élément à son URL d'image
 def get_element_url(element):
     element_mapping = {
         'colorless': 'https://pokexp.com/uploads/2021/07/08072021-normal.png',
@@ -38,15 +41,16 @@ def get_element_url(element):
     element_clean = corrections.get(element.lower().strip(), element.lower().strip())
     return element_mapping.get(element_clean)
 
+# Extrait les informations détaillées d'une carte depuis son URL
 def extraire_infos_depuis_page(url, card_type):
     try:
         r = requests.get(url, timeout=10)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, 'html.parser')
 
-        # MODIFICATION : Extraire element et hp seulement si c'est un Pokémon
+        # Extraction uniquement pour les cartes de type Pokémon
         element, hp = None, None
-        if card_type == "Pok mon":  # Seulement pour les Pokémon
+        if card_type == "Pok mon":
             titre = soup.find('p', class_='card-text-title')
             if titre:
                 for part in titre.get_text(separator=' ', strip=True).split(' - '):
@@ -98,11 +102,10 @@ def extraire_infos_depuis_page(url, card_type):
         print(f"⚠️ Erreur sur {url} : {e}")
         return (None,) * 8
 
+# Crée une connexion PostgreSQL en UTF-8
 def get_conn():
-    """Connexion PostgreSQL ultra-robuste"""
     try:
         os.environ['PGCLIENTENCODING'] = 'UTF8'
-        
         conn = psycopg2.connect(
             host='localhost', 
             port=5432, 
@@ -112,14 +115,14 @@ def get_conn():
         conn.set_client_encoding('UTF8')
         return conn
     except UnicodeDecodeError:
-        conn = psycopg2.connect(
+        return psycopg2.connect(
             host='localhost', 
             port=5432, 
             dbname='postgres', 
             user='postgres'
         )
-        return conn
 
+# Crée ou recrée la table card_complement
 def create_card_complement_table():
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -142,10 +145,10 @@ def create_card_complement_table():
         conn.commit()
         print("🧱 Table card_complement créée.")
 
+# Met à jour les données complémentaires manquantes pour les cartes
 def maj_cartes():
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # MODIFICATION : Récupérer aussi le card_type pour filtrer
             cur.execute("""
                 SELECT c.card_id, c.card_type FROM card c
                 WHERE c.card_id NOT IN (SELECT card_id FROM card_complement);
@@ -156,7 +159,6 @@ def maj_cartes():
             updated = 0
 
             for card_id, card_type in cartes:
-                # Passer le card_type à la fonction d'extraction
                 infos = extraire_infos_depuis_page(card_id, card_type)
                 if any(infos):
                     infos_cleaned = tuple(remove_non_utf8(x) if isinstance(x, str) else x for x in infos)
@@ -187,10 +189,10 @@ def maj_cartes():
             conn.commit()
             print(f"\n✅ Mise à jour terminée ({updated} cartes modifiées).")
 
+# Met à jour l'URL de l'élément (élément → image) pour les cartes de type Pokémon
 def update_element_urls():
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # MODIFICATION : Filtrer seulement les cartes Pokémon pour les element_url
             cur.execute("""
                 SELECT cc.card_id, cc.card_element 
                 FROM card_complement cc
@@ -224,6 +226,7 @@ def update_element_urls():
             conn.commit()
             print(f"✅ Mise à jour des card_element_url terminée ({updated} cartes Pokémon modifiées).")
 
+# Point d'entrée principal
 if __name__ == '__main__':
     print("🧱 Création de la table card_complement...")
     create_card_complement_table()
