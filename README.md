@@ -29,7 +29,7 @@ L’objectif principal est de collecter, structurer et analyser des informations
 ## Structure du projet
 
 - `Data_collection` : contient le code python d’extraction et de structuration des données
-- `Data_transformation` : contient les scripts python pour la transformation des données
+- `Data_transformation` :  Ce dossier contient plusieurs scripts de transformation de données.Le fichier exe.py situé dans ce dossier permet de lancer automatiquement tous les scripts contenus dans ce dossier, pour exécuter l’ensemble des transformations de données.
 - `data_viz` : contient le fichier PowerBI.
 - `requirements.txt` : dépendances Python nécessaires à l’exécution
 
