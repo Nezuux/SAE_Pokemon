@@ -2,7 +2,7 @@
 import sys
 import os
 
-# Force l'encodage UTF-8 dès le début
+# Forcer l'encodage de la sortie standard et d'erreur en UTF-8 (utile pour les consoles Windows)
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
@@ -12,23 +12,29 @@ import psycopg2
 import json
 import re
 
-# Paramètres PostgreSQL
+# Paramètres de connexion PostgreSQL
 host = 'localhost'
 port = 5432
 database = 'postgres'
 user = 'postgres'
 
-# Dossier contenant les fichiers JSON
+# Dossier contenant les fichiers JSON à traiter
 json_folder = os.getenv("JSON_FOLDER", r"E:\DataCollection\output")
 
 def remove_non_ascii(text):
-    # CORRECTION : Gérer les valeurs None
+    """
+    Supprime les caractères non-ASCII d'une chaîne de texte.
+    Remplace les caractères invalides par un espace.
+    """
     if text is None:
         return ''
     return re.sub(r'[^\x00-\x7F]', ' ', str(text)).strip()
 
 def safe_json_load(file_path):
-    """Version ultra-blindée pour charger n'importe quel fichier JSON"""
+    """
+    Tente de charger un fichier JSON en testant plusieurs encodages courants.
+    Retourne None en cas d'échec.
+    """
     encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
     
     for encoding in encodings:
@@ -38,6 +44,7 @@ def safe_json_load(file_path):
         except:
             continue
     
+    # Dernière tentative avec lecture binaire et décodage manuel
     try:
         with open(file_path, 'rb') as f:
             content = f.read()
@@ -47,14 +54,20 @@ def safe_json_load(file_path):
         return None
 
 def safe_listdir(folder):
-    """Listage ultra-sécurisé"""
+    """
+    Liste les fichiers .json d’un dossier en toute sécurité.
+    Évite les erreurs dues à des dossiers manquants ou protégés.
+    """
     try:
         return [f for f in os.listdir(folder) if f.endswith('.json')]
     except:
         return []
 
 def get_conn():
-    """Connexion PostgreSQL ultra-robuste"""
+    """
+    Établit une connexion PostgreSQL avec encodage UTF-8.
+    Gère les erreurs liées à l'encodage.
+    """
     try:
         os.environ['PGCLIENTENCODING'] = 'UTF8'
         
@@ -67,6 +80,7 @@ def get_conn():
         conn.set_client_encoding('UTF8')
         return conn
     except UnicodeDecodeError:
+        # Connexion de secours si l'encodage échoue
         conn = psycopg2.connect(
             host=host, 
             port=port, 
@@ -76,6 +90,9 @@ def get_conn():
         return conn
 
 def create_player_table(conn):
+    """
+    Crée la table 'player' si elle n’existe pas déjà.
+    """
     with conn.cursor() as cur:
         cur.execute("""
         CREATE TABLE IF NOT EXISTS player (
@@ -88,9 +105,12 @@ def create_player_table(conn):
         print("✅ Table 'player' prête.")
 
 def upsert_player(conn, player):
+    """
+    Insère ou met à jour un joueur dans la table 'player'.
+    Gère les doublons via ON CONFLICT.
+    """
     with conn.cursor() as cur:
         try:
-            # CORRECTION : Gérer les valeurs None avant l'appel à remove_non_ascii
             player_id = player.get('id') or ''
             player_name = player.get('name') or ''
             player_country = player.get('country') or ''
@@ -113,6 +133,10 @@ def upsert_player(conn, player):
             return False
 
 def main():
+    """
+    Programme principal : lit les fichiers JSON, insère les joueurs en base de données,
+    et affiche un rapport final.
+    """
     try:
         print("[INFO] Démarrage du traitement players...")
         
@@ -137,12 +161,13 @@ def main():
                 continue
                 
             for player in data.get('players', []):
-                if player.get('id') and player.get('name'):  # Validation des données essentielles
+                # Ne traite que les joueurs avec un id et un nom valides
+                if player.get('id') and player.get('name'):
                     total_players += 1
                     if upsert_player(conn, player):
                         upserted_players += 1
             
-            # Commit périodique pour éviter les transactions trop longues
+            # Commit périodique pour limiter la taille des transactions
             if i % 50 == 0:
                 conn.commit()
 
