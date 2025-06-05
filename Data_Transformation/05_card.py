@@ -2,7 +2,7 @@
 import sys
 import os
 
-# Force l'encodage UTF-8 dès le début
+# Configuration de l'encodage de la sortie standard pour éviter les erreurs d'affichage
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 import time
 
-# Configuration ultra-optimisée
+# Paramètres de connexion et traitement
 host = 'localhost'
 port = 5432
 database = 'postgres'
@@ -26,17 +26,16 @@ BATCH_SIZE = 100000
 MAX_WORKERS = 12
 
 def clean_url(url):
-    """Nettoie l'URL en gardant les caractères valides d'URL"""
+    """Nettoie une URL en conservant uniquement les caractères valides"""
     if not url:
         return ''
     try:
-        # Garde les caractères valides d'URL : lettres, chiffres, /, :, -, _, ., ?, =, &
         return re.sub(r'[^\w\-\./:?=&]', '', str(url)).strip()
     except:
         return ''
 
 def remove_non_ascii(text):
-    """Pour les noms et types seulement"""
+    """Supprime les caractères non ASCII (utilisé pour les noms et types)"""
     if not text:
         return ''
     try:
@@ -46,7 +45,7 @@ def remove_non_ascii(text):
         return ''
 
 def safe_json_load(file_path):
-    """Version ultra-blindée"""
+    """Charge un fichier JSON en testant plusieurs encodages courants"""
     encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
     
     for encoding in encodings:
@@ -66,17 +65,16 @@ def safe_json_load(file_path):
         return None
 
 def safe_listdir(folder):
-    """Listage ultra-sécurisé"""
+    """Liste les fichiers JSON dans un dossier, avec gestion d'erreur"""
     try:
         return [f for f in os.listdir(folder) if f.endswith('.json')]
     except:
         return []
 
 def get_conn():
-    """Connexion PostgreSQL ultra-robuste"""
+    """Établit une connexion PostgreSQL avec encodage UTF-8"""
     try:
         os.environ['PGCLIENTENCODING'] = 'UTF8'
-        
         conn = psycopg2.connect(
             host=host, 
             port=port, 
@@ -86,15 +84,15 @@ def get_conn():
         conn.set_client_encoding('UTF8')
         return conn
     except UnicodeDecodeError:
-        conn = psycopg2.connect(
+        return psycopg2.connect(
             host=host, 
             port=port, 
             dbname=database, 
             user=user
         )
-        return conn
 
 def drop_and_create_card_table(conn):
+    """Supprime et recrée la table 'card' avec une structure simple"""
     with conn.cursor() as cur:
         cur.execute("""
             DROP TABLE IF EXISTS card CASCADE;
@@ -108,7 +106,7 @@ def drop_and_create_card_table(conn):
         print("[OK] Table UNLOGGED 'card' créée.")
 
 def process_file(filename):
-    """Version ultra-blindée avec URL correcte"""
+    """Extrait les cartes valides depuis un fichier JSON donné"""
     try:
         file_path = os.path.join(json_folder, filename)
         data = safe_json_load(file_path)
@@ -124,10 +122,9 @@ def process_file(filename):
                     card.get('name') and 
                     card.get('type')):
                     
-                    # CORRECTION : Utilisation de clean_url pour garder l'URL intacte
                     card_id = clean_url(card['url'])
                     
-                    if card_id:  # Vérification que l'URL n'est pas vide
+                    if card_id:
                         cards.add((
                             card_id,
                             remove_non_ascii(card['name']),
@@ -139,14 +136,14 @@ def process_file(filename):
         return []
 
 def deduplicate_on_card_id(cards):
-    """Conserve le dernier tuple pour chaque card_id"""
+    """Élimine les doublons en conservant la dernière version de chaque carte"""
     unique = {}
     for c in cards:
         unique[c[0]] = c
     return list(unique.values())
 
 def chunked_iterable(iterable, size):
-    """Découpage efficace en chunks"""
+    """Divise un itérable en blocs de taille donnée"""
     it = iter(iterable)
     while True:
         chunk = list(islice(it, size))
