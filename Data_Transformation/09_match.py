@@ -2,7 +2,7 @@
 import sys
 import os
 
-# Force l'encodage UTF-8 dès le début
+# Forcer l'encodage UTF-8 pour les sorties standard et d'erreur
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
@@ -17,51 +17,54 @@ from itertools import islice
 import time
 import multiprocessing
 
-# Configuration ultra-optimisée
+# Configuration des paramètres de connexion et du traitement
 host = 'localhost'
 port = 5432
 database = 'postgres'
 user = 'postgres'
-json_folder = os.getenv("JSON_FOLDER")
-BATCH_SIZE = 500000  # ÉNORME batch pour insertion massive
-MAX_WORKERS = min(16, multiprocessing.cpu_count())  # Utilise tous les CPU disponibles
+json_folder = os.getenv("JSON_FOLDER")  # Dossier contenant les fichiers JSON à traiter
+BATCH_SIZE = 500000  # Taille énorme des lots pour insertion massive en base
+MAX_WORKERS = min(16, multiprocessing.cpu_count())  # Nombre de threads max selon CPU dispo
 
-# Compilation regex pour performance
+# Compilation d'une regex pour retirer les caractères non ASCII (optimisation)
 ASCII_PATTERN = re.compile(r'[^\x00-\x7F]')
 
 def remove_non_ascii(text):
+    """Supprime tous les caractères non ASCII d'une chaîne"""
     return ASCII_PATTERN.sub(' ', text).strip()
 
 def safe_json_load(file_path):
-    """Version ultra-blindée et rapide"""
+    """Chargement JSON sécurisé et multi-encodages"""
     encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
     
+    # Tente différents encodages pour charger le fichier
     for encoding in encodings:
         try:
             with open(file_path, 'r', encoding=encoding, errors='replace') as f:
-                return json.load(f)  # Directement json.load() plus rapide
+                return json.load(f)  # Chargement direct JSON
         except:
             continue
     
+    # Fallback : lecture en binaire puis décodage en UTF-8 avec remplacement
     try:
         with open(file_path, 'rb') as f:
             content = f.read()
             text = content.decode('utf-8', errors='replace')
             return json.loads(text)
     except:
-        return None
+        return None  # Retourne None si échec total
 
 def safe_listdir(folder):
-    """Listage ultra-sécurisé"""
+    """Liste les fichiers JSON dans un dossier, en évitant les erreurs"""
     try:
         return [f for f in os.listdir(folder) if f.endswith('.json')]
     except:
-        return []
+        return []  # Retourne liste vide en cas d'erreur
 
 def get_conn():
-    """Connexion PostgreSQL ultra-robuste"""
+    """Connexion robuste à PostgreSQL avec gestion d'encodage"""
     try:
-        os.environ['PGCLIENTENCODING'] = 'UTF8'
+        os.environ['PGCLIENTENCODING'] = 'UTF8'  # Force encodage client UTF-8
         
         conn = psycopg2.connect(
             host=host, 
@@ -72,6 +75,7 @@ def get_conn():
         conn.set_client_encoding('UTF8')
         return conn
     except UnicodeDecodeError:
+        # En cas d'erreur d'encodage, reconnecte sans forcer encodage
         conn = psycopg2.connect(
             host=host, 
             port=port, 
@@ -81,6 +85,7 @@ def get_conn():
         return conn
 
 def drop_and_create_match_table(conn):
+    """Supprime et recrée la table 'match' en mode UNLOGGED pour performance"""
     with conn.cursor() as cur:
         cur.execute("""
             DROP TABLE IF EXISTS match;
@@ -98,24 +103,25 @@ def drop_and_create_match_table(conn):
         print("[OK] Table UNLOGGED 'match' créée.")
 
 def process_file_chunk(filenames):
-    """Traitement parallélisé d'un chunk de fichiers"""
+    """Traitement en parallèle d'un chunk de fichiers JSON pour extraire les données matches"""
     all_matches = []
     
     for filename in filenames:
         try:
             file_path = os.path.join(json_folder, filename)
-            data = safe_json_load(file_path)
+            data = safe_json_load(file_path)  # Chargement sécurisé du fichier JSON
             
             if not data:
                 continue
             
-            tournament_id = remove_non_ascii(data.get('id', ''))
+            tournament_id = remove_non_ascii(data.get('id', ''))  # Nettoyage ID tournoi
             if not tournament_id:
                 continue
             
+            # Parcours de chaque match dans le fichier JSON
             for match in data.get('matches', []):
                 match_results = match.get('match_results', [])
-                if len(match_results) != 2:
+                if len(match_results) != 2:  # On attend exactement deux joueurs
                     continue
                 
                 try:
@@ -131,26 +137,27 @@ def process_file_chunk(filenames):
                     elif p2_score > p1_score:
                         winner = p2_id
                     else:
-                        winner = None
+                        winner = None  # Égalité
                     
+                    # Ajout des données du match à la liste finale
                     all_matches.append((
                         tournament_id, p1_id, p1_score, 
                         p2_id, p2_score, winner
                     ))
                 except (KeyError, ValueError, TypeError):
-                    continue
+                    continue  # Ignore les entrées mal formées
         except:
-            continue
+            continue  # Ignore les fichiers corrompus
     
     return all_matches
 
 def chunked_files(files, chunk_size):
-    """Découpe les fichiers en chunks pour traitement parallèle"""
+    """Découpe la liste des fichiers en morceaux (chunks) pour traitement parallèle"""
     for i in range(0, len(files), chunk_size):
         yield files[i:i + chunk_size]
 
 def chunked_iterable(iterable, size):
-    """Découpage efficace en chunks"""
+    """Découpe un itérable en morceaux de taille fixe"""
     it = iter(iterable)
     while True:
         chunk = list(islice(it, size))
@@ -164,10 +171,10 @@ def main():
     try:
         print("[INFO] Démarrage du traitement matches ULTRA-RAPIDE...")
         
-        conn = get_conn()
-        drop_and_create_match_table(conn)
+        conn = get_conn()  # Connexion à la base
+        drop_and_create_match_table(conn)  # Prépare la table match
         
-        # Phase 1: Récupération des fichiers
+        # Phase 1: Récupération des fichiers JSON
         files = safe_listdir(json_folder)
         total_files = len(files)
         
@@ -183,14 +190,12 @@ def main():
         all_matches = []
         files_per_worker = max(1, total_files // MAX_WORKERS)
         
+        # Utilisation de ThreadPoolExecutor pour paralléliser la lecture et extraction des données
         with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # Découpage des fichiers en chunks pour chaque worker
             file_chunks = list(chunked_files(files, files_per_worker))
-            
-            # Soumission des tâches
             futures = [executor.submit(process_file_chunk, chunk) for chunk in file_chunks]
             
-            # Collecte des résultats
+            # Collecte des résultats au fur et à mesure
             processed_chunks = 0
             for future in as_completed(futures):
                 matches = future.result()
@@ -207,7 +212,7 @@ def main():
             print("[INFO] Aucun match trouvé")
             return
         
-        # Phase 3: Insertion ultra-rapide par méga-chunks
+        # Phase 3: Insertion massive en base par lots énormes
         inserted = 0
         with conn.cursor() as cur:
             for chunk_num, chunk in enumerate(chunked_iterable(all_matches, BATCH_SIZE)):
@@ -222,23 +227,23 @@ def main():
                     )
                     
                     inserted += len(chunk)
-                    if chunk_num % 2 == 0:  # Affichage moins fréquent
+                    if chunk_num % 2 == 0:  # Affichage régulier mais pas trop fréquent
                         print(f"[INSERTION] {inserted:,}/{total_matches:,} matches insérés", end='\r')
                 except Exception as e:
                     print(f"\n[ERREUR INSERTION] {e}")
                     continue
         
-        # Phase 4: Finalisation ultra-rapide
+        # Phase 4: Finalisation, création d'index et contraintes pour optimiser la table
         print(f"\n[INFO] Finalisation...")
         with conn.cursor() as cur:
             try:
-                cur.execute("ALTER TABLE match SET LOGGED")
-                cur.execute("ALTER TABLE match ADD PRIMARY KEY (match_id)")
-                cur.execute("CREATE INDEX idx_match_tournament ON match(tournament_id)")
-                cur.execute("CREATE INDEX idx_match_players ON match(player1_id, player2_id)")
-                cur.execute("CREATE INDEX idx_match_winner ON match(match_winner)")
+                cur.execute("ALTER TABLE match SET LOGGED")  # Rend la table durable après chargement initial
+                cur.execute("ALTER TABLE match ADD PRIMARY KEY (match_id)")  # Clé primaire automatique
+                cur.execute("CREATE INDEX idx_match_tournament ON match(tournament_id)")  # Index sur tournoi
+                cur.execute("CREATE INDEX idx_match_players ON match(player1_id, player2_id)")  # Index sur joueurs
+                cur.execute("CREATE INDEX idx_match_winner ON match(match_winner)")  # Index sur gagnant
                 
-                # Contrainte FK avec gestion d'erreur
+                # Ajout contrainte FK vers tournoi, ignore erreur si la table référencée n'existe pas
                 try:
                     cur.execute("ALTER TABLE match ADD CONSTRAINT fk_match_tournament FOREIGN KEY (tournament_id) REFERENCES tournament(tournament_id)")
                 except Exception as e:
@@ -253,11 +258,4 @@ def main():
         elapsed = time.time() - start_time
         rate = total_matches / elapsed if elapsed > 0 else 0
         
-        print(f"[OK] ULTRA-RAPIDE terminé en {elapsed:.1f}s : {total_matches:,} matches insérés")
-        print(f"[PERFORMANCE] {rate:,.0f} matches/sec | {total_files} fichiers traités")
-        
-    except Exception as e:
-        print(f"[ERREUR CRITIQUE] {e}")
-
-if __name__ == '__main__':
-    main()
+        print(f"[OK] ULTRA
