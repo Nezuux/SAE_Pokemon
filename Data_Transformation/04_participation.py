@@ -2,7 +2,7 @@
 import sys
 import os
 
-# Force l'encodage UTF-8 dès le début
+# Forcer l'encodage des sorties pour éviter les erreurs sur certains terminaux
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
@@ -16,64 +16,63 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 import time
 
-# Configuration ultra-optimisée
+# Paramètres de configuration
 host = 'localhost'
 port = 5432
 database = 'postgres'
 user = 'postgres'
 json_folder = os.getenv("JSON_FOLDER")
-BATCH_SIZE = 100000     # Batch énorme pour insertion massive
-MAX_WORKERS = 12        # Traitement parallèle des fichiers
+BATCH_SIZE = 100000      # Taille des lots pour insertion massive
+MAX_WORKERS = 12         # Nombre maximum de threads pour le traitement parallèle
 
 def remove_non_ascii(text):
+    """
+    Nettoie une chaîne de texte en supprimant les caractères non-ASCII.
+    Retourne une chaîne vide en cas de valeur invalide.
+    """
     if not text:
         return ''
     try:
-        text = str(text)
-        return re.sub(r'[^\x00-\x7F]', ' ', text).strip()
+        return re.sub(r'[^\x00-\x7F]', ' ', str(text)).strip()
     except:
         return ''
 
 def safe_json_load(file_path):
-    """Version ultra-blindée"""
+    """
+    Tente de charger un fichier JSON en testant plusieurs encodages.
+    Retourne un dictionnaire ou None en cas d’échec.
+    """
     encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
     
     for encoding in encodings:
         try:
             with open(file_path, 'r', encoding=encoding, errors='replace') as f:
-                content = f.read()
-                return json.loads(content)
+                return json.loads(f.read())
         except:
             continue
     
     try:
         with open(file_path, 'rb') as f:
             content = f.read()
-            text = content.decode('utf-8', errors='replace')
-            return json.loads(text)
+            return json.loads(content.decode('utf-8', errors='replace'))
     except:
         return None
 
 def safe_listdir(folder):
-    """Listage ultra-sécurisé"""
+    """
+    Retourne la liste des fichiers .json d’un dossier, en évitant les erreurs système.
+    """
     try:
-        files = []
-        for item in os.listdir(folder):
-            try:
-                if item.endswith('.json'):
-                    files.append(item)
-            except:
-                continue
-        return files
+        return [item for item in os.listdir(folder) if item.endswith('.json')]
     except:
         return []
 
 def get_conn():
-    """Connexion PostgreSQL ultra-robuste"""
+    """
+    Établit une connexion PostgreSQL avec encodage UTF-8 robuste.
+    """
     try:
-        # Force l'encodage système
         os.environ['PGCLIENTENCODING'] = 'UTF8'
-        
         conn = psycopg2.connect(
             host=host, 
             port=port, 
@@ -83,16 +82,17 @@ def get_conn():
         conn.set_client_encoding('UTF8')
         return conn
     except UnicodeDecodeError:
-        # Fallback minimal
-        conn = psycopg2.connect(
+        return psycopg2.connect(
             host=host, 
             port=port, 
             dbname=database, 
             user=user
         )
-        return conn
 
 def drop_and_create_participation_table(conn):
+    """
+    Supprime puis crée la table 'participation' sous forme UNLOGGED pour des insertions rapides.
+    """
     with conn.cursor() as cur:
         cur.execute("""
             DROP TABLE IF EXISTS participation;
@@ -109,7 +109,9 @@ def drop_and_create_participation_table(conn):
         print("[OK] Table UNLOGGED 'participation' créée.")
 
 def process_file(filename):
-    """Version ultra-blindée"""
+    """
+    Traite un fichier JSON et retourne une liste de participations nettoyées.
+    """
     try:
         file_path = os.path.join(json_folder, filename)
         data = safe_json_load(file_path)
@@ -119,7 +121,6 @@ def process_file(filename):
         
         tournament_id = remove_non_ascii(data.get('id', ''))
         tournament_name = remove_non_ascii(data.get('name', ''))
-        
         if not tournament_id:
             return []
         
@@ -135,7 +136,7 @@ def process_file(filename):
                 str(placing).isdigit() and 
                 int(placing) > 0 and 
                 player_id):
-                
+
                 key = (player_id, tournament_id)
                 if key not in seen:
                     seen.add(key)
@@ -152,6 +153,9 @@ def process_file(filename):
         return []
 
 def chunked_iterable(iterable, size):
+    """
+    Découpe un itérable en sous-listes (chunks) de taille définie.
+    """
     it = iter(iterable)
     while True:
         chunk = list(islice(it, size))
@@ -165,14 +169,11 @@ def main():
     try:
         print("[INFO] Démarrage du traitement participations...")
         
-        # Connexion PostgreSQL ultra-robuste
         conn = get_conn()
-        
         drop_and_create_participation_table(conn)
         
         files = safe_listdir(json_folder)
         total_files = len(files)
-        
         print(f"[INFO] {total_files} fichiers trouvés")
         
         all_participations = []
@@ -188,16 +189,15 @@ def main():
         total_participations = len(all_participations)
         print(f"[INFO] {total_participations:,} participations collectées")
         
-        # Déduplication globale
+        # Déduplication
         unique_participations = list(set(all_participations))
-        deduplicated_count = len(unique_participations)
+        if len(unique_participations) < total_participations:
+            print(f"[DEDUPLICATION] {total_participations - len(unique_participations):,} doublons supprimés")
         
-        if deduplicated_count < total_participations:
-            print(f"[DEDUPLICATION] {total_participations - deduplicated_count:,} doublons supprimés")
-            all_participations = unique_participations
-            total_participations = deduplicated_count
+        all_participations = unique_participations
+        total_participations = len(all_participations)
         
-        # Insertion
+        # Insertion en batch
         inserted = 0
         with conn.cursor() as cur:
             for chunk in chunked_iterable(all_participations, BATCH_SIZE):
@@ -214,9 +214,8 @@ def main():
                     print(f"[INSERTION] {inserted:,}/{total_participations:,} participations insérées", end='\r')
                 except Exception as e:
                     print(f"\n[ERREUR INSERTION] {e}")
-                    continue
         
-        # Finalisation
+        # Finalisation : ajout des indexes, contraintes, passage en table LOGGED
         print(f"\n[INFO] Finalisation...")
         with conn.cursor() as cur:
             try:
@@ -225,7 +224,7 @@ def main():
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_participation_tournament ON participation(tournament_id)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_participation_placing ON participation(participation_placing)")
                 
-                # Contraintes de clés étrangères
+                # Ajout des contraintes FK
                 try:
                     cur.execute("ALTER TABLE participation ADD CONSTRAINT fk_participation_player FOREIGN KEY (player_id) REFERENCES player(player_id)")
                     cur.execute("ALTER TABLE participation ADD CONSTRAINT fk_participation_tournament FOREIGN KEY (tournament_id) REFERENCES tournament(tournament_id)")
